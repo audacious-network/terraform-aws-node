@@ -1,0 +1,358 @@
+#cloud-config
+
+system_info:
+    default_user:
+        name: ${username}
+        gecos: ${username}
+        primary_group: ${username}
+        ssh_import_id: None
+        lock_passwd: true
+        ssh_authorized_keys:
+            ${authorized_keys}
+
+users:
+    - default
+    -
+        name: prometheus
+        gecos: prometheus daemon
+        system: true
+        sudo: false
+        shell: /usr/sbin/nologin
+
+ssh_deletekeys: true
+ssh_keys:
+    ed25519_private: |
+        ${host_key_private}
+    ed25519_public: |
+        ${host_key_public}
+    ed25519_certificate: |
+        ${host_key_certificate}
+
+packages:
+    - awscli
+    - certbot
+    - curl
+    - jq
+    - python-is-python3
+    - python3
+    - python3-certbot-nginx
+    - software-properties-common
+    - wget
+
+write_files:
+    -
+        owner: root:root
+        path: /etc/letsencrypt/options-ssl-nginx.conf
+        permissions: '0644'
+        content: |
+            ssl_session_cache shared:le_nginx_SSL:10m;
+            ssl_session_timeout 1440m;
+            ssl_session_tickets off;
+            ssl_protocols TLSv1.2 TLSv1.3;
+            ssl_prefer_server_ciphers off;
+            ssl_ciphers "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384";
+    -
+        owner: root:root
+        path: /etc/letsencrypt/ssl-dhparams.pem
+        permissions: '0644'
+        content: |
+            -----BEGIN DH PARAMETERS-----
+            MIIBCAKCAQEA//////////+t+FRYortKmq/cViAnPTzx2LnFg84tNpWp4TZBFGQz
+            +8yTnc4kmz75fS/jY2MMddj2gbICrsRhetPfHtXV/WVhJDP1H18GbtCFY2VVPe0a
+            87VXE15/V8k1mE8McODmi3fipona8+/och3xWKE2rec1MKzKT0g6eXq8CrGCsyT7
+            YdEIqUuyyOP7uWrat2DX9GgdT0Kj3jlN9K5W7edjcrsZCwenyO4KbXCeAvzhzffi
+            7MA0BM0oNC9hkXL+nOmFg/+OTxIy7vKBg8P+OxtMb61zO7X8vC7CIAXFjvGDfRaD
+            ssbzSibBsu/6iGtCOGEoXJf//////////wIBAg==
+            -----END DH PARAMETERS-----
+    -
+        owner: root:root
+        path: /etc/nginx/sites-available/default-ssl
+        permissions: '0644'
+        content: |
+            server {
+                server_name ${cname} ${hostname}.${domain};
+                listen [::]:443 ssl ipv6only=on;
+                listen 443 ssl;
+                root /var/www/html;
+                index index.html;
+                gzip off;
+                location / {
+                    proxy_pass http://localhost:${substrate_ws_port}/;
+                    proxy_set_header X-Real-IP $remote_addr;
+                    proxy_set_header Host $host;
+                    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                    proxy_http_version 1.1;
+                    proxy_set_header Upgrade $http_upgrade;
+                    proxy_set_header Connection "upgrade";
+                }
+                ssl_certificate /etc/letsencrypt/live/${cname}/fullchain.pem;
+                ssl_certificate_key /etc/letsencrypt/live/${cname}/privkey.pem;
+                include /etc/letsencrypt/options-ssl-nginx.conf;
+                ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+            }
+    -
+        owner: root:root
+        path: /var/www/html/index.html
+        permissions: '0644'
+        content: |
+            <!DOCTYPE HTML>
+            <html lang="en">
+                <head>
+                    <meta charset="utf-8">
+                    <meta http-equiv="refresh" content="0;url=${redirect_url}" />
+                    <link rel="canonical" href="${redirect_url}" />
+                </head>
+                <body>
+                    <p>
+                        this page been moved to <a href="${redirect_url}">${redirect_url}</a>
+                    </p>
+                </body>
+            </html>
+    -
+        owner: root:root
+        path: /etc/cloudwatch.json
+        permissions: '0644'
+        content: |
+            {
+                "agent": {
+                    "metrics_collection_interval": 60,
+                    "run_as_user": "root"
+                },
+                "logs": {
+                  "logs_collected": {
+                    "files": {
+                      "collect_list": [
+                        {
+                            "file_path": "/var/log/auth.log",
+                            "log_group_name": "${cname}",
+                            "log_stream_name": "auth"
+                        },
+                        {
+                            "file_path": "/var/log/syslog",
+                            "log_group_name": "${cname}",
+                            "log_stream_name": "sys"
+                        },
+                        {
+                            "file_path": "/var/log/cloud-init.log",
+                            "log_group_name": "${cname}",
+                            "log_stream_name": "cloud-init"
+                        },
+                        {
+                            "file_path": "/var/log/cloud-init-output.log",
+                            "log_group_name": "${cname}",
+                            "log_stream_name": "cloud-init-output"
+                        },
+                        {
+                            "file_path": "/var/log/letsencrypt/letsencrypt.log",
+                            "log_group_name": "${cname}",
+                            "log_stream_name": "letsencrypt"
+                        },
+                        {
+                            "file_path": "/var/log/${substrate_executable}/stderr.log",
+                            "log_group_name": "${cname}",
+                            "log_stream_name": "${substrate_executable}"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "metrics": {
+                    "append_dimensions": {
+                        "AutoScalingGroupName": "$${aws:AutoScalingGroupName}",
+                        "ImageId": "$${aws:ImageId}",
+                        "InstanceId": "$${aws:InstanceId}",
+                        "InstanceType": "$${aws:InstanceType}"
+                    },
+                    "metrics_collected": {
+                        "disk": {
+                            "measurement": [ "used_percent" ],
+                            "metrics_collection_interval": 60,
+                            "resources": [ "*" ]
+                        },
+                        "mem": {
+                            "measurement": [ "mem_used_percent" ],
+                            "metrics_collection_interval": 60
+                        },
+                        "statsd": {
+                            "metrics_aggregation_interval": 60,
+                            "metrics_collection_interval": 10,
+                            "service_address": ":8125"
+                        }
+                    }
+                }
+            }
+    -
+        owner: root:root
+        path: /etc/prometheus/prometheus.yml
+        permissions: '0644'
+        content: |
+            global:
+                scrape_interval: 15s
+                evaluation_interval: 15s
+            rule_files:
+                # - first.rules
+                # - second.rules
+            scrape_configs:
+                -
+                    job_name: prometheus
+                    scrape_interval: 5s
+                    static_configs:
+                        - targets:
+                            - localhost:9090
+                -
+                    job_name: substrate_node
+                    scrape_interval: 5s
+                    static_configs:
+                        - targets:
+                            - localhost:9615
+    -
+        owner: root:root
+        path: /etc/systemd/system/prometheus.service
+        permissions: '0644'
+        content: |
+            [Unit]
+            Description=Prometheus Monitoring
+            Wants=network-online.target
+            After=network-online.target
+
+            [Service]
+            User=prometheus
+            Group=prometheus
+            Type=simple
+            ExecStart=/usr/local/bin/prometheus \
+              --config.file /etc/prometheus/prometheus.yml \
+              --storage.tsdb.path /var/lib/prometheus/ \
+              --web.console.templates=/etc/prometheus/consoles \
+              --web.console.libraries=/etc/prometheus/console_libraries
+            ExecReload=/bin/kill -HUP $MAINPID
+
+            [Install]
+            WantedBy=multi-user.target
+    -
+        owner: root:root
+        path: /etc/alertmanager/alertmanager.yml
+        permissions: '0644'
+        content: |
+            global:
+                resolve_timeout: 1m
+            route:
+                receiver: 'email-notifications'
+            receivers:
+                -
+                    name: 'email-notifications'
+                    email_configs:
+                        -
+                            to: ${admin_email}
+                            from: ${username}@${cname}
+                            smarthost: email-smtp.us-west-2.amazonaws.com:587
+                            auth_username: ${smtp_username}
+                            auth_password: ${smtp_password}
+                            require_tls: yes
+    -
+        owner: root:root
+        path: /etc/systemd/system/alertmanager.service
+        permissions: '0644'
+        content: |
+            [Unit]
+            Description=AlertManager Service
+            Wants=network-online.target
+            After=network-online.target
+
+            [Service]
+            User=root
+            Group=root
+            Type=simple
+            ExecStart=/usr/local/bin/alertmanager \
+              --config.file /etc/alertmanager/alertmanager.yml \
+              --web.external-url=http://${cname}:${alertmanager_port} \
+              --cluster.advertise-address='0.0.0.0:${alertmanager_port}'
+
+            [Install]
+            WantedBy=multi-user.target
+    -
+        owner: root:root
+        path: /etc/systemd/system/${substrate_executable}.service
+        permissions: '0644'
+        content: |
+            [Unit]
+            Description=${substrate_executable}
+            Wants=network-online.target
+            After=network-online.target
+
+            [Service]
+            User=root
+            Group=root
+            Type=simple
+            ExecStart=/usr/local/bin/${substrate_executable} \
+              ${substrate_flags} \
+              --name ${substrate_name} \
+              --base-path /var/lib/${substrate_executable} \
+              --node-key-file /usr/share/${substrate_executable}/node-key \
+              --chain ${substrate_chain} \
+              --port ${substrate_port} \
+              --ws-port ${substrate_ws_port} \
+              --rpc-cors ${substrate_rpc_cors} \
+              ${substrate_args}
+            Restart=always
+            RestartSec=120
+            StandardOutput=file:/var/log/${substrate_executable}/stdout.log
+            StandardError=file:/var/log/${substrate_executable}/stderr.log
+
+            [Install]
+            WantedBy=multi-user.target
+
+hostname: ${hostname}.${domain}
+fqdn: ${cname}
+
+runcmd:
+    - mkdir -p /usr/local/bin
+
+    # install and configure cloudwatch
+    - wget --quiet https://s3.amazonaws.com/amazoncloudwatch-agent/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb
+    - dpkg -i -E ./amazon-cloudwatch-agent.deb
+    - /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/etc/cloudwatch.json
+    - systemctl enable amazon-cloudwatch-agent.service
+    - service amazon-cloudwatch-agent start
+
+    # fetch or generate let's encrypt cert and configure nginx
+    - curl -sL ${certify_script_url} | bash -s ${admin_email} ${hostname} ${domain} ${cname}
+    - rm /etc/nginx/sites-enabled/default
+    - ln -s /etc/nginx/sites-available/default-ssl /etc/nginx/sites-enabled/default
+    - systemctl restart nginx
+    - systemctl status nginx
+
+    # install and run prometheus
+    - wget --quiet https://github.com/prometheus/prometheus/releases/download/v2.26.0/prometheus-2.26.0.linux-amd64.tar.gz
+    - tar xvfz prometheus-2.26.0.linux-amd64.tar.gz -C /usr/local/bin --strip-components=1 prometheus-2.26.0.linux-amd64/prometheus
+    - tar xvfz prometheus-2.26.0.linux-amd64.tar.gz -C /usr/local/bin --strip-components=1 prometheus-2.26.0.linux-amd64/promtool
+    - mkdir -p /etc/prometheus /var/lib/prometheus
+    - tar xfz prometheus-2.26.0.linux-amd64.tar.gz -C /etc/prometheus --strip-components=1 prometheus-2.26.0.linux-amd64/consoles
+    - tar xfz prometheus-2.26.0.linux-amd64.tar.gz -C /etc/prometheus --strip-components=1 prometheus-2.26.0.linux-amd64/console_libraries
+    - chown -R prometheus:prometheus /etc/prometheus /var/lib/prometheus
+    - rm prometheus-2.26.0.linux-amd64.tar.gz
+    - /usr/local/bin/promtool check config /etc/prometheus/prometheus.yml
+    - systemctl enable --now prometheus.service
+    - systemctl status prometheus.service
+
+    # install and run alertmanager
+    - wget --quiet https://github.com/prometheus/alertmanager/releases/download/v0.21.0/alertmanager-0.21.0.linux-amd64.tar.gz
+    - tar xvfz alertmanager-0.21.0.linux-amd64.tar.gz -C /usr/local/bin --strip-components=1 alertmanager-0.21.0.linux-amd64/alertmanager
+    - systemctl enable --now alertmanager.service
+    - systemctl status alertmanager.service
+
+    # create substrate log, data and config folders
+    - mkdir -p /var/log/${substrate_executable} /var/lib/${substrate_executable} /usr/share/${substrate_executable}
+
+    # download chain-spec.json (fail quietly if relay_chainspec_url is not set, since fallback is substrate_chain)
+    - wget --quiet ${substrate_chainspec_url} -O /usr/share/${substrate_executable}/${substrate_executable}-chain-spec.json || true
+
+    # download substrate executable
+    - wget --quiet ${substrate_release_url} -O /usr/local/bin/${substrate_executable}
+    - chmod +x /usr/local/bin/${substrate_executable}
+
+    # sync local substrate base path with s3 base path (in case this node has previously existed)
+    - aws s3 sync s3://${bucket_name}/var/lib/${substrate_executable} /var/lib/${substrate_executable} || true
+
+    # register substrate service and set service state to one of: 'disable', 'enable', 'enable --now' (enable and start)
+    - systemctl ${substrate_daemon_state} ${substrate_executable}.service
+    - systemctl status ${substrate_executable}.service

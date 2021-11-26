@@ -23,6 +23,9 @@ variable "region" {
 variable "profile" {
   type = string
 }
+variable "dns_profile" {
+  type = string
+}
 variable "username" {
   type = string
 }

@@ -2,6 +2,11 @@ provider "aws" {
   region = var.region
   profile = var.profile
 }
+provider "aws" {
+  alias = "dns_profile"
+  region = var.region
+  profile = var.dns_profile == "" ? var.profile : var.dns_profile
+}
 
 locals {
   host_keys = yamldecode(data.aws_secretsmanager_secret_version.host_keys.secret_string)
@@ -109,36 +114,17 @@ resource "aws_instance" "node" {
   }
 }
 data "aws_route53_zone" "node" {
+  provider = aws.dns_profile
   name = var.zone_lookup
 }
 resource "aws_route53_record" "node" {
+  provider = aws.dns_profile
   zone_id = data.aws_route53_zone.node.zone_id
   name = var.cname
   type = "A"
   ttl = var.ttl
   records = [aws_instance.node.public_ip]
 }
-#resource "aws_acm_certificate" "node" {
-#  domain_name = var.cname
-#  # we can only use acm certs (wih dns validation) for route53 managed domains
-#  #subject_alternative_names = "${var.hostname}.${var.domain}"
-#  validation_method = "DNS"
-#  lifecycle {
-#    create_before_destroy = true
-#  }
-#}
-#resource "aws_route53_record" "node_validation" {
-#  depends_on = [aws_acm_certificate.node]
-#  name = element(tolist(aws_acm_certificate.node.domain_validation_options), 0)["resource_record_name"]
-#  type = element(tolist(aws_acm_certificate.node.domain_validation_options), 0)["resource_record_type"]
-#  zone_id = data.aws_route53_zone.node.zone_id
-#  records = [element(tolist(aws_acm_certificate.node.domain_validation_options), 0)["resource_record_value"]]
-#  ttl = 60
-#}
-#resource "aws_acm_certificate_validation" "node" {
-#  certificate_arn = aws_acm_certificate.node.arn
-#  validation_record_fqdns = aws_route53_record.node_validation.*.fqdn
-#}
 
 resource "aws_iam_role" "node" {
   name = "${var.deployment}-${var.hostname}"
@@ -308,6 +294,7 @@ resource "aws_ses_domain_mail_from" "node" {
   mail_from_domain = "bounce.${aws_ses_domain_identity.node.domain}"
 }
 resource "aws_route53_record" "node_mx" {
+  provider = aws.dns_profile
   zone_id = aws_route53_record.node.zone_id
   name = aws_ses_domain_mail_from.node.mail_from_domain
   type = "MX"
@@ -320,6 +307,7 @@ resource "aws_route53_record" "node_mx" {
   ]
 }
 resource "aws_route53_record" "node_txt_spf" {
+  provider = aws.dns_profile
   zone_id = aws_route53_record.node.zone_id
   name = aws_ses_domain_mail_from.node.mail_from_domain
   type = "TXT"
@@ -329,6 +317,7 @@ resource "aws_route53_record" "node_txt_spf" {
   ]
 }
 resource "aws_route53_record" "node_txt_ses" {
+  provider = aws.dns_profile
   zone_id = aws_route53_record.node.zone_id
   name = "_amazonses.${aws_ses_domain_identity.node.id}"
   type = "TXT"
